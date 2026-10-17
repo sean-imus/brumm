@@ -58,6 +58,21 @@ pub fn script_json(v: &Value) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
+/// The page expression for Engine::sound: [spectrum, wave], each part
+/// asked for only when wanted, and empty when the page fails at it.
+fn sound_js(bands: i64, wave: i64) -> String {
+    let ask = |n: i64, call: String| if n > 0 { call } else { "[]".to_string() };
+    format!(
+        "(() => {{ const part = (f) => {{ try {{ return window.brumm ? f() : []; }} catch {{ return []; }} }}; \
+         return [part(() => {}), part(() => {})]; }})()",
+        ask(
+            bands,
+            format!("brumm.spectrum ? brumm.spectrum({bands}) : []")
+        ),
+        ask(wave, format!("brumm.wave ? brumm.wave({wave}) : []")),
+    )
+}
+
 /// A JavaScript string literal of s.
 fn js(s: &str) -> String {
     script_json(&Value::String(s.to_string()))
@@ -552,24 +567,17 @@ impl Engine {
         Ok((st, rev))
     }
 
-    /// n log-spaced frequency bands, 0–255 each.
-    pub async fn spectrum(&self, n: i64) -> Result<Vec<i64>> {
-        let v = self
-            .eval(&format!(
-                "window.brumm && brumm.spectrum ? brumm.spectrum({n}) : []"
-            ))
-            .await?;
-        Ok(serde_json::from_value(v)?)
-    }
-
-    /// n waveform samples, -100…100.
-    pub async fn wave(&self, n: i64) -> Result<Vec<i64>> {
-        let v = self
-            .eval(&format!(
-                "window.brumm && brumm.wave ? brumm.wave({n}) : []"
-            ))
-            .await?;
-        Ok(serde_json::from_value(v)?)
+    /// bands log-spaced frequency bands, 0–255 each, and wave waveform
+    /// samples, -100…100, in one call to the page: a frame of the
+    /// visualizer is one round trip, not two. A part not asked for (0), or
+    /// one the page fails at, is empty.
+    pub async fn sound(&self, bands: i64, wave: i64) -> Result<(Vec<i64>, Vec<i64>)> {
+        let v = self.eval(&sound_js(bands, wave)).await?;
+        let (spectrum, wave): (Value, Value) = serde_json::from_value(v)?;
+        Ok((
+            serde_json::from_value(spectrum).unwrap_or_default(),
+            serde_json::from_value(wave).unwrap_or_default(),
+        ))
     }
 
     /// Plays a song's 30-second clip over a paused queue.
@@ -748,6 +756,15 @@ impl Drop for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame of the sound asks the page only for the parts wanted.
+    #[test]
+    fn sound_asks_only_for_what_is_wanted() {
+        let both = sound_js(48, 96);
+        assert!(both.contains("brumm.spectrum(48)") && both.contains("brumm.wave(96)"));
+        let spectrum = sound_js(48, 0);
+        assert!(spectrum.contains("brumm.spectrum(48)") && !spectrum.contains("brumm.wave("));
+    }
 
     /// Every brumm.<name>(…) the engine calls exists on the playback page:
     /// a missing one fails silently in Chrome.

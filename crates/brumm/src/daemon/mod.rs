@@ -686,27 +686,45 @@ impl Daemon {
         if !self.playing() || (bands == 0 && wave == 0) {
             return IDLE_WAKE;
         }
-        if bands > 0
-            && let Ok(spec) = eng.spectrum(bands).await
-            && !spec.is_empty()
-        {
-            self.broadcast(Message {
-                spectrum: spec,
-                ..Default::default()
-            })
-            .await;
-        }
-        if wave > 0
-            && let Ok(w) = eng.wave(wave).await
-            && !w.is_empty()
-        {
-            self.broadcast(Message {
-                wave: w,
-                ..Default::default()
-            })
-            .await;
+        if let Ok((spectrum, wave)) = eng.sound(bands, wave).await {
+            self.broadcast_sound(spectrum, wave).await;
         }
         Duration::from_secs(1) / fps.max(1) as u32
+    }
+
+    /// Pushes a frame of the sound: each subscriber gets the parts it asked
+    /// for, in one message. A player that cannot keep up is disconnected.
+    async fn broadcast_sound(&self, spectrum: Vec<i64>, wave: Vec<i64>) {
+        let targets: Vec<(Arc<ConnOut>, bool, bool)> = {
+            let i = self.lock();
+            i.conns
+                .values()
+                .filter_map(|c| {
+                    let parts = (
+                        c.bands > 0 && !spectrum.is_empty(),
+                        c.wave > 0 && !wave.is_empty(),
+                    );
+                    (c.sub && (parts.0 || parts.1)).then(|| (c.out.clone(), parts.0, parts.1))
+                })
+                .collect()
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let generation = self.session.current();
+        // Encoded once for each mix of parts some subscriber wants.
+        let mut lines: HashMap<(bool, bool), Vec<u8>> = HashMap::new();
+        for (out, s, w) in targets {
+            let line = lines.entry((s, w)).or_insert_with(|| {
+                ipc::encode(&Message {
+                    generation,
+                    spectrum: if s { spectrum.clone() } else { Vec::new() },
+                    wave: if w { wave.clone() } else { Vec::new() },
+                    ..Default::default()
+                })
+            });
+            out.send(line).await;
+        }
     }
 
     fn playing(&self) -> bool {
@@ -1979,6 +1997,58 @@ mod tests {
             "the stalled player was not dropped"
         );
         drop(stalled);
+    }
+
+    /// A frame of the sound reaches each subscriber in one message, with
+    /// the parts it asked for and no others.
+    #[tokio::test]
+    async fn sound_frames_carry_what_each_player_asked_for() {
+        let d = daemon();
+        let mut players = Vec::new();
+        for (bands, wave) in [(48, 0), (0, 96), (64, 256), (0, 0)] {
+            let (c, events) = connect(&d).await;
+            c.request(Request {
+                cmd: ipc::CMD_SUBSCRIBE.into(),
+                bands,
+                wave,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            players.push((c, events));
+        }
+        d.broadcast_sound(vec![1, 2], vec![-3, 4]).await;
+        let mut got = Vec::new();
+        for (_, events) in &mut players[..3] {
+            let m = tokio::time::timeout(Duration::from_secs(1), events.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            got.push((m.spectrum, m.wave));
+        }
+        assert_eq!(
+            got,
+            [
+                (vec![1, 2], vec![]),
+                (vec![], vec![-3, 4]),
+                (vec![1, 2], vec![-3, 4])
+            ]
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), players[3].1.recv())
+                .await
+                .is_err(),
+            "asked for no sound"
+        );
+        // No waveform this time: the player that wants only it hears nothing.
+        d.broadcast_sound(vec![5], Vec::new()).await;
+        let m = players[2].1.recv().await.unwrap();
+        assert_eq!((m.spectrum, m.wave), (vec![5], vec![]));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), players[1].1.recv())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
