@@ -190,7 +190,7 @@ void Daemon::readLines()
             if (done.isCallable() && m_engine) {
                 const QString err = msg.value("error").toString();
                 done.call(QJSValueList{err.isEmpty() ? QJSValue(QJSValue::NullValue) : QJSValue(err),
-                                       m_engine->toScriptValue(msg.toVariantMap())});
+                                       m_engine->toScriptValue(msg)});
             }
             if (msg.contains("state"))
                 emit state(msg.value("state").toObject().toVariantMap());
