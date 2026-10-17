@@ -29,8 +29,10 @@ public:
     bool omarchy() const { return m_omarchy; }
 
     // listen asks for the spectrum and waveform (on) or stops them: only
-    // the visualizer needs them, and they cost the daemon work.
-    Q_INVOKABLE void listen(bool on);
+    // the visualizer needs them, and they cost the daemon work. fps is how
+    // often the visualizer draws: a frame of sound between two drawn ones
+    // would never be seen.
+    Q_INVOKABLE void listen(bool on, int fps = 60);
 
     // setOption changes one shared option; done(error) when it is saved.
     Q_INVOKABLE void setOption(const QString &name, const QVariant &value, const QJSValue &done = QJSValue());
@@ -63,6 +65,7 @@ private:
     void connectNow();
     void readLines();
     void subscribe();
+    QJsonObject subscription() const;
     void write(QJsonObject req, const QJSValue &done);
 
     QLocalSocket m_sock;
@@ -76,4 +79,5 @@ private:
     bool m_omarchy = false;
     bool m_agent = false;
     bool m_listening = false;
+    int m_fps = 60;
 };

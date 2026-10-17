@@ -33,7 +33,13 @@ Item {
         && (store.full || (!!store.st.playing && !ui.calm))
         && !win.popup && !store.menuOpen
     readonly property bool listening: moving && !artworkStyle
-    onListeningChanged: daemon.listen(listening)
+    // The sound as often as the visualizer draws, and no more.
+    onListeningChanged: daemon.listen(listening, vizClock.fps)
+    Connections {
+        target: vizClock
+        enabled: fs.listening
+        function onFpsChanged() { daemon.listen(true, vizClock.fps) }
+    }
     MappedRect {
         id: playerBounds
         sourceItem: playbackStage.visualizerArea

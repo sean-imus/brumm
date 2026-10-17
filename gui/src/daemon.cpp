@@ -1,5 +1,7 @@
 #include "daemon.h"
 
+#include <algorithm>
+
 #include <QJSEngine>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -92,22 +94,28 @@ void Daemon::connectNow()
 
 void Daemon::subscribe()
 {
-    // State, and the sound only while the visualizer shows.
-    if (m_listening)
-        write(QJsonObject{{"cmd", "subscribe"}, {"bands", 64}, {"wave", 256}, {"fps", 60}}, QJSValue());
-    else
-        write(QJsonObject{{"cmd", "subscribe"}}, QJSValue());
+    write(subscription(), QJSValue());
     write(QJsonObject{{"cmd", "options"}}, QJSValue());
 }
 
-void Daemon::listen(bool on)
+// State, and the sound only while the visualizer shows, as often as it
+// draws (the daemon sends at most 60 frames a second).
+QJsonObject Daemon::subscription() const
 {
-    if (on == m_listening)
+    if (!m_listening)
+        return QJsonObject{{"cmd", "subscribe"}};
+    return QJsonObject{{"cmd", "subscribe"}, {"bands", 64}, {"wave", 256}, {"fps", m_fps}};
+}
+
+void Daemon::listen(bool on, int fps)
+{
+    fps = std::clamp(fps, 1, 60);
+    if (on == m_listening && (!on || fps == m_fps))
         return;
     m_listening = on;
+    m_fps = fps;
     if (connected())
-        write(on ? QJsonObject{{"cmd", "subscribe"}, {"bands", 64}, {"wave", 256}, {"fps", 60}} : QJsonObject{{"cmd", "subscribe"}},
-              QJSValue());
+        write(subscription(), QJSValue());
 }
 
 void Daemon::setOption(const QString &name, const QVariant &value, const QJSValue &done)
