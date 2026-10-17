@@ -1041,6 +1041,30 @@ fn next_tick() {
     assert!(m.still);
 }
 
+/// The daemon's first answer shows what plays at once: its provider,
+/// new to the model, does not wipe the state that came with it.
+#[test]
+fn the_state_comes_with_the_provider() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut provider = crate::provider::registry::selection(&crate::config::Config::default());
+    provider.generation = 1;
+    let mut st = ready();
+    st.player.title = "Instant Crush".into();
+    st.player.playing = true;
+    let m = super::first_model(
+        None,
+        Message {
+            provider: Some(provider),
+            state: Some(st),
+            ..Default::default()
+        },
+    );
+    assert_eq!(m.state.player.title, "Instant Crush");
+    assert!(m.state.player.playing);
+}
+
 /// The spectrum streams only while the playing row's bars show in a
 /// focused window, or the visualizer.
 #[test]

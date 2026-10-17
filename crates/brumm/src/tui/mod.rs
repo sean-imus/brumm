@@ -95,11 +95,7 @@ pub fn run(rt: &tokio::runtime::Runtime) -> Result<()> {
         });
     }
 
-    let mut m = Model::new(Some(client.clone()), reply.state.unwrap_or_default());
-    m.event(crate::ipc::Message {
-        provider: reply.provider,
-        ..Default::default()
-    });
+    let mut m = first_model(Some(client.clone()), reply);
     m.tx = Some(tx.clone());
     let screen = Screen::enter()?;
     let _ = tx.send(Msg::Probe {
@@ -130,6 +126,19 @@ pub fn run(rt: &tokio::runtime::Runtime) -> Result<()> {
         return Err(e.into());
     }
     Ok(())
+}
+
+/// The model as the daemon's first answer has it. The provider and the
+/// state come together, as on a reconnect: a provider new to the model
+/// resets its state, so the state must come with it, after it.
+pub(crate) fn first_model(client: Option<ipc::Client>, reply: ipc::Message) -> Model {
+    let mut m = Model::new(client, ipc::State::default());
+    m.event(ipc::Message {
+        provider: reply.provider,
+        state: reply.state,
+        ..Default::default()
+    });
+    m
 }
 
 /// Passes the daemon's events to the loop, and says when it went away.
