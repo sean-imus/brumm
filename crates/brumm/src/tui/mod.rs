@@ -163,7 +163,12 @@ fn run_loop(
     rx: &mpsc::Receiver<Msg>,
     tx: &Sender<Msg>,
 ) -> Result<()> {
-    let mut term = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    // A frame goes out in one write, not stdout's 1 KiB pieces: each wakes
+    // the terminal, and one without synchronized updates may show a frame
+    // half drawn between two of them. (Its markers each go at once, so a
+    // panic while drawing leaves nothing behind to follow the restore.)
+    let out = io::BufWriter::with_capacity(64 << 10, io::stdout());
+    let mut term = Terminal::new(CrosstermBackend::new(out))?;
     // Not term.clear(): since ratatui 0.30 it asks the terminal where the
     // cursor is, and the input thread, already reading, takes the answer.
     execute!(
