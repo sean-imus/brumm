@@ -1300,11 +1300,12 @@ impl Model {
         if self.client.is_some() && self.drawn && self.want_spec() != self.spec_on {
             self.subscribe(); // the playing row came into view, or left it
         }
-        if !is_tick {
+        if !is_tick && !self.still {
             // Something happened: give the screen a frame to settle, and
             // more for as long as it animates. A tick far off (a card
             // waiting to go) is brought forward when something now needs
-            // frames sooner.
+            // frames sooner. What changed nothing (the once-a-second look
+            // for an update, a key let go) asks for no frame.
             match (self.tick_at, self.next_tick()) {
                 (None, _) => self.schedule(FRAME_EVERY),
                 (Some(at), Some(every))

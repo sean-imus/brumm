@@ -1041,6 +1041,30 @@ fn next_tick() {
     assert!(m.still);
 }
 
+/// What changes nothing asks for no frame: an idle player stays idle
+/// through the once-a-second look for an update and a key let go.
+#[test]
+fn unchanged_screens_draw_nothing() {
+    let Some(_env) = testenv::isolated() else {
+        return;
+    };
+    let mut m = model(120, 35);
+    m.cur_mut().loaded = true;
+    for msg in [
+        Msg::BinaryCheck,
+        Msg::Key(Key {
+            release: true,
+            ..Key::named("a")
+        }),
+    ] {
+        m.update(msg);
+        assert!(m.still, "nothing changed");
+        assert_eq!(m.tick_at, None, "a frame was scheduled for nothing");
+    }
+    press(&mut m, "down");
+    assert!(m.tick_at.is_some(), "a change still gets its frame");
+}
+
 /// The daemon's first answer shows what plays at once: its provider,
 /// new to the model, does not wipe the state that came with it.
 #[test]
