@@ -129,7 +129,8 @@ fn arch(x: f64, y: f64, w: f64, foot: f64, spring: f64) -> f64 {
     let body = if y < spring {
         w - x.abs()
     } else {
-        2.0 * w - (x.abs() + w).hypot(y - spring)
+        let (a, b) = (x.abs() + w, y - spring);
+        2.0 * w - (a * a + b * b).sqrt()
     };
     body.min(y - foot)
 }
@@ -399,8 +400,11 @@ struct Room<'a> {
 impl Room<'_> {
     /// What the end wall holds at (x, y), and its piece's band.
     fn wall(&self, x: f64, y: f64) -> (u8, u8) {
-        let u = (x + WW * 0.5) / WW;
-        let v = (y - SILL) / WH;
+        self.map((x + WW * 0.5) / WW, (y - SILL) / WH)
+    }
+
+    /// What the window's map holds at (u, v), 0 … 1 across and up it.
+    fn map(&self, u: f64, v: f64) -> (u8, u8) {
         if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
             return (0, 0);
         }
@@ -421,12 +425,11 @@ impl Room<'_> {
         let mut n = [0u8; 10];
         let mut band = [0u8; 10];
         let mut stone = 0;
+        let (u, v) = ((x + WW * 0.5) / WW, (y - SILL) / WH);
+        let (du, dv) = (size / 3.0 / WW, size / 3.0 / WH);
         for j in 0..3 {
             for i in 0..3 {
-                let (c, b) = self.wall(
-                    x + (i as f64 - 1.0) * size / 3.0,
-                    y + (j as f64 - 1.0) * size / 3.0,
-                );
+                let (c, b) = self.map(u + (i as f64 - 1.0) * du, v + (j as f64 - 1.0) * dv);
                 if (1..=9).contains(&c) {
                     n[c as usize] += 1;
                     band[c as usize] = b;
@@ -437,8 +440,8 @@ impl Room<'_> {
         }
         let best = (1..10).max_by_key(|&c| n[c]).unwrap_or(1);
         match (stone, n[best]) {
-            (_, 0) => self.wall(x, y),
-            (s, _) if s >= 5 => self.wall(x, y),
+            (_, 0) => self.map(u, v),
+            (s, _) if s >= 5 => self.map(u, v),
             _ => (best as u8, band[best]),
         }
     }
@@ -532,19 +535,27 @@ impl Room<'_> {
     }
 }
 
+/// The four piers from the camera at ro, once a frame: per pier, the
+/// camera's x and z off its axis, and that distance squared less its
+/// radius squared.
+fn piers_from(ro: V3) -> [(f64, f64, f64); 4] {
+    std::array::from_fn(|i| {
+        let cx = if i < 2 { -PX } else { PX };
+        let cz = PZ0 - PDZ * (i % 2) as f64;
+        let (ox, oz) = (ro[0] - cx, ro[2] - cz);
+        (ox, oz, ox * ox + oz * oz - PR * PR)
+    })
+}
+
 /// How far a ray goes to the nearest pier, and the normal's x and z there.
-fn piers(ro: V3, rd: V3) -> (f64, f64, f64) {
+fn piers(seen: &[(f64, f64, f64); 4], rd: V3) -> (f64, f64, f64) {
     let mut best = (f64::MAX, 0.0, 0.0);
     let a = rd[0] * rd[0] + rd[2] * rd[2];
     if a < 1e-12 {
         return best;
     }
-    for i in 0..4 {
-        let cx = if i < 2 { -PX } else { PX };
-        let cz = PZ0 - PDZ * (i % 2) as f64;
-        let (ox, oz) = (ro[0] - cx, ro[2] - cz);
+    for &(ox, oz, cc) in seen {
         let b = ox * rd[0] + oz * rd[2];
-        let cc = ox * ox + oz * oz - PR * PR;
         let disc = b * b - a * cc;
         if disc > 0.0 {
             let t = (-b - disc.sqrt()) / a;
@@ -558,9 +569,11 @@ fn piers(ro: V3, rd: V3) -> (f64, f64, f64) {
 
 /// The ashlar's mortar at (x, y) on a wall: true on a joint.
 fn mortar(x: f64, y: f64) -> bool {
-    let row = (y / 0.42).floor();
+    let course = y / 0.42;
+    let row = course.floor();
     let bx = x / 0.78 + if row as i64 % 2 == 0 { 0.0 } else { 0.5 };
-    let (fx, fy) = (bx.rem_euclid(1.0), (y / 0.42).rem_euclid(1.0));
+    // x - floor(x) is rem_euclid(1.0) exactly, without its fmod call.
+    let (fx, fy) = (bx - bx.floor(), course - row);
     !(0.05..0.95).contains(&fx) || !(0.1..0.9).contains(&fy)
 }
 
@@ -641,6 +654,16 @@ impl Visualizer {
             *b = at(&a.sm, 0.05 + 0.75 * i as f64 / 15.0);
         }
         let (glow, high, live) = (s.glow, a.high, a.live);
+        let seen = piers_from(ro);
+        // Room::light along a ray, stepped: traced back along the sun, the
+        // point t along a ray meets the wall's map at (cu, cv), where the
+        // camera's own point meets it, plus t · (du, dv).
+        let sl = room.l;
+        let s0 = ro[2] / sl[2];
+        let (cu, cv) = (
+            (ro[0] - sl[0] * s0 + WW * 0.5) / WW,
+            (ro[1] - sl[1] * s0 - SILL) / WH,
+        );
 
         let (fw_, fp) = (w as f64, big_p as f64);
         let aspect = fw_ / fp.max(1.0);
@@ -671,15 +694,16 @@ impl Visualizer {
                 } else {
                     f64::MAX
                 };
-                let (tp, nx, nz) = piers(ro, rd);
+                let (tp, nx, nz) = piers(&seen, rd);
                 let th = tw.min(tf).min(tp).min(tv);
                 let mut out = 0u8;
                 let mut glass_here = false;
                 if th < f64::MAX {
                     let p = add(ro, mul(rd, th));
-                    // the window's glow on the stone round it
-                    let dw = p[0].hypot(p[1] - (SILL + WH * 0.5)).hypot(p[2]);
-                    let near = sun / (1.0 + dw * dw * 0.1);
+                    // the window's glow on the stone round it, by the
+                    // squared distance to its middle
+                    let dy = p[1] - (SILL + WH * 0.5);
+                    let near = sun / (1.0 + (p[0] * p[0] + dy * dy + p[2] * p[2]) * 0.1);
                     if th == tw {
                         match room.glass(p[0], p[1], th / (room.focal * fp)) {
                             (c, b) if (1..=9).contains(&c) => {
@@ -711,7 +735,8 @@ impl Visualizer {
                     } else if th == tp {
                         // a pier: dark, its outline a thin line where the
                         // ray grazes it
-                        let graze = (nx * rd[0] + nz * rd[2]).abs() / rd[0].hypot(rd[2]).max(1e-9);
+                        let graze = (nx * rd[0] + nz * rd[2]).abs()
+                            / (rd[0] * rd[0] + rd[2] * rd[2]).sqrt().max(1e-9);
                         let fade = smooth(14.0, 9.5, p[1]);
                         // the band of the column one pixel wide at each side
                         let r = PR * room.focal * fp / (th * dot(rd, fw)).max(1e-6);
@@ -727,17 +752,22 @@ impl Visualizer {
                     let step = far / STEPS as f64;
                     let mut sum = 0.0;
                     let mut by_color = [0f32; 9];
+                    let ds = rd[2] / sl[2];
+                    let (du, dv) = ((rd[0] - sl[0] * ds) / WW, (rd[1] - sl[1] * ds) / WH);
                     for i in 0..STEPS {
-                        let p = add(ro, mul(rd, step * (i as f64 + d2)));
-                        if p[2] > -0.02 {
+                        let t = step * (i as f64 + d2);
+                        let z = ro[2] + rd[2] * t;
+                        if z > -0.02 {
                             break;
                         }
-                        let (c, s) = room.light(p, (0.0, 0.0));
-                        if c != 0 {
+                        let c = room.map(cu + du * t, cv + dv * t).0;
+                        if (1..=9).contains(&c) {
+                            let (x, y) = (ro[0] + rd[0] * t, ro[1] + rd[1] * t);
+                            let s = z / sl[2];
                             let dens = 0.8
                                 + 0.3
-                                    * vsin((p[0] * 1.3 + p[2] * 0.7 - tick * 0.1) as f32) as f64
-                                    * vsin((p[1] * 1.1 + tick * 0.07) as f32) as f64;
+                                    * vsin((x * 1.3 + z * 0.7 - tick * 0.1) as f32) as f64
+                                    * vsin((y * 1.1 + tick * 0.07) as f32) as f64;
                             let wt = GLASS[c as usize - 1].2 as f64 * (-s * 0.06).exp() * dens;
                             by_color[c as usize - 1] += 1.0; // its color by area, not brightness
                             sum += wt;
