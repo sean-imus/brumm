@@ -139,6 +139,11 @@ pub fn fit(l: &L, n: usize) -> L {
     pad(trunc(l, n), n)
 }
 
+/// fit, taking l: one that fits is padded as it is, not copied.
+pub fn fit_owned(l: L, n: usize) -> L {
+    if w(&l) <= n { pad(l, n) } else { fit(&l, n) }
+}
+
 /// l and r at the two edges of n columns, l cut short when both do not fit.
 pub fn spread(l: L, r: L, n: usize) -> L {
     let rw = w(&r);

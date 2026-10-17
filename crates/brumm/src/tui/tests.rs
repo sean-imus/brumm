@@ -2004,6 +2004,62 @@ fn drawing_uses_the_current_terminal_size() {
     assert_eq!((m.width, m.height), (160, 45));
 }
 
+/// put writes what ratatui's set_line writes, cell for cell, whatever the
+/// text: wide, combining, joined, control, cut at the edge.
+#[test]
+fn put_writes_as_set_line_does() {
+    use ratatui::style::{Color, Style};
+    use ratatui::text::Span;
+    let spans = |parts: &[(&str, Style)]| -> L {
+        line(
+            parts
+                .iter()
+                .map(|(t, s)| Span::styled(t.to_string(), *s))
+                .collect(),
+        )
+    };
+    let red = Style::new().fg(Color::Red);
+    let blue = Style::new().bg(Color::Blue);
+    let lines = [
+        spans(&[("plain ascii", PLAIN), ("▀", red), ("▀", blue), ("▀▀", red)]),
+        spans(&[("漢字", red), ("x", PLAIN), ("界", blue), ("é", BOLD)]),
+        spans(&[
+            ("e\u{301}", red),
+            ("\u{301}", PLAIN),
+            ("a\tb\x1b", blue),
+            ("\u{7}", red),
+        ]),
+        spans(&[
+            ("👍🏽", PLAIN),
+            ("🇩🇪", red),
+            ("ｶﾞ", blue),
+            ("ﾟ", PLAIN),
+            ("\u{200b}", red),
+        ]),
+        spans(&[
+            ("", PLAIN),
+            (" ", red),
+            ("~}|", blue),
+            ("…", DIM),
+            ("ʕ•ᴥ•ʔ", HERE),
+        ]),
+        line(vec![sp("tail", BOLD), sp("界", PLAIN)]).style(Style::new().bg(Color::Green)),
+    ];
+    for l in &lines {
+        for width in 1..=18u16 {
+            for x in [0i64, 1, 3, 17] {
+                let area = Area::new(0, 0, width, 1);
+                let (mut want, mut got) = (Buffer::empty(area), Buffer::empty(area));
+                if x < width as i64 {
+                    want.set_line(x as u16, 0, l, width - x as u16);
+                }
+                super::view::put(&mut got, x, 0, l);
+                assert_eq!(got, want, "{l:?} at {x} in {width}");
+            }
+        }
+    }
+}
+
 #[test]
 fn pixel_cover_resize_runs_off_the_input_thread() {
     let Some(_env) = testenv::isolated() else {

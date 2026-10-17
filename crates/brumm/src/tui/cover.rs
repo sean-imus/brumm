@@ -1,15 +1,30 @@
 //! Covers on the screen: drawn as pixel art or smooth half blocks, or
 //! shown through kitty graphics as the real image.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use image::RgbaImage;
 use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 
 use super::model::{Cmd, KittyReq, Model, Msg};
 use super::options::COVER_PIXEL;
 use super::text::*;
 use crate::art::{self, Picture, Size};
+
+/// Upper half blocks, the smooth cover's every cell: its runs borrow from
+/// here, so a kept cover is copied each frame without allocating.
+const HALVES: &str = "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀";
+
+/// A run's text: borrowed when it is half blocks only.
+fn run(text: String) -> Cow<'static, str> {
+    if text.len() <= HALVES.len() && HALVES.starts_with(text.as_str()) {
+        Cow::Borrowed(&HALVES[..text.len()])
+    } else {
+        Cow::Owned(text)
+    }
+}
 
 /// Turns drawn cells into lines, one span per run of equal colors.
 pub fn picture_lines(p: &Picture) -> Vec<L> {
@@ -22,8 +37,8 @@ pub fn picture_lines(p: &Picture) -> Vec<L> {
                 let pair = (c.fg, c.bg);
                 if cur != Some(pair) {
                     if let Some((f, b)) = cur {
-                        spans.push(sp(
-                            std::mem::take(&mut text),
+                        spans.push(Span::styled(
+                            run(std::mem::take(&mut text)),
                             Style::new()
                                 .fg(Color::Rgb(f[0], f[1], f[2]))
                                 .bg(Color::Rgb(b[0], b[1], b[2])),
@@ -34,8 +49,8 @@ pub fn picture_lines(p: &Picture) -> Vec<L> {
                 text.push(c.ch);
             }
             if let Some((f, b)) = cur {
-                spans.push(sp(
-                    text,
+                spans.push(Span::styled(
+                    run(text),
                     Style::new()
                         .fg(Color::Rgb(f[0], f[1], f[2]))
                         .bg(Color::Rgb(b[0], b[1], b[2])),

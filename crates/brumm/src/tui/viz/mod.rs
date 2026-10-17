@@ -338,27 +338,33 @@ impl Visualizer {
         }
     }
 
-    /// Styled rows for the visualizer embedded in the normal player.
+    /// Styled rows for the visualizer embedded in the normal player, one
+    /// span per run of equal colors.
     pub fn lines(&self) -> Vec<super::text::L> {
         use ratatui::{
             style::Style,
             text::{Line, Span},
         };
+        let style = |(fg, bg): (u8, u8)| Style::default().fg(color(fg)).bg(color(bg));
         (0..self.h)
             .map(|y| {
-                Line::from(
-                    (0..self.w)
-                        .map(|x| {
-                            let i = y * self.w + x;
-                            Span::styled(
-                                self.glyph[i].to_string(),
-                                Style::default()
-                                    .fg(color(self.col[i]))
-                                    .bg(color(self.bg[i])),
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                )
+                let mut spans = Vec::new();
+                let mut text = String::new();
+                let mut cur = None;
+                for i in y * self.w..(y + 1) * self.w {
+                    let pair = (self.col[i], self.bg[i]);
+                    if cur != Some(pair) {
+                        if let Some(c) = cur {
+                            spans.push(Span::styled(std::mem::take(&mut text), style(c)));
+                        }
+                        cur = Some(pair);
+                    }
+                    text.push(self.glyph[i]);
+                }
+                if let Some(c) = cur {
+                    spans.push(Span::styled(text, style(c)));
+                }
+                Line::from(spans)
             })
             .collect()
     }

@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellWidth};
 
 use super::geometry::{FootHit, Geometry, Rect};
 use super::model::{Cmd, Model, Msg};
@@ -241,14 +241,13 @@ impl Model {
             let nav = self.nav(nav_w, body_h, MARGIN, BODY_TOP);
             let gap = " ".repeat(gap_w as usize);
             let n = nav.len().max(stage.len());
-            for i in 0..n {
+            let (mut nav, mut stage) = (nav.into_iter(), stage.into_iter());
+            for _ in 0..n {
                 let l = nav
-                    .get(i)
-                    .cloned()
+                    .next()
                     .unwrap_or_else(|| plain(" ".repeat(nav_w as usize)));
                 let r = stage
-                    .get(i)
-                    .cloned()
+                    .next()
                     .unwrap_or_else(|| plain(" ".repeat(col_w as usize)));
                 lines.push(cat(cat(cat(plain(pad.clone()), l), plain(gap.clone())), r));
             }
@@ -524,7 +523,7 @@ impl Model {
                         break;
                     }
                     let l = self.row(i, inner);
-                    lines.push(fit(&l, inner as usize));
+                    lines.push(fit_owned(l, inner as usize));
                 }
             }
         }
@@ -555,7 +554,7 @@ impl Model {
         };
         let head = head.unwrap_or(lines.len());
         for l in lines.iter_mut().take(head) {
-            *l = fit(l, inner as usize);
+            *l = fit_owned(std::mem::take(l), inner as usize);
         }
         let mut label = one(pos.clone(), DIM);
         if self.show_tips() {
@@ -608,7 +607,12 @@ impl Model {
             return L::default();
         }
         let sel = i == v.sel;
-        let (sel_at, view_item) = (v.sel_at, v.item.clone());
+        let sel_at = v.sel_at;
+        // On an album: whether the song is by another artist than it.
+        let album_guest = match (&r.track, &v.item) {
+            (Some(t), Some(vi)) if vi.kind == KIND_ALBUM => Some(t.artist != vi.artist),
+            _ => None,
+        };
         let gutter = if sel {
             line(vec![sp("▌", self.acc.here), sp(" ", PLAIN)])
         } else {
@@ -636,9 +640,7 @@ impl Model {
                 title.clone(),
                 line(vec![sp("  ", PLAIN), sp(t.artist.clone(), DIM)]),
             );
-            if let Some(vi) = &view_item
-                && vi.kind == KIND_ALBUM
-            {
+            if let Some(guest) = album_guest {
                 let mut n = t.number;
                 if n == 0 {
                     // cached before numbers were kept: count
@@ -648,7 +650,7 @@ impl Model {
                         .count() as i64;
                 }
                 text = cat(one(format!("{n:2}  "), DIM), title);
-                if t.artist != vi.artist {
+                if guest {
                     // compilations, features
                     text.spans.push(sp("  ", PLAIN));
                     text.spans.push(sp(t.artist.clone(), DIM));
@@ -697,7 +699,7 @@ impl Model {
         if sel && !self.opts.o.reduce_motion {
             self.marquee = self.marquee || w(&text) as i64 > avail;
             text = marquee(&text, avail as usize, self.frame - sel_at);
-        } else {
+        } else if w(&text) as i64 > avail {
             text = trunc(&text, avail as usize);
         }
         cat(
@@ -787,14 +789,15 @@ impl Model {
         let blank = plain(" ".repeat(col_w.max(0) as usize));
         let mut out: Vec<L> = vec![blank; h.max(0) as usize];
         let mut hits: Vec<(Hit, i64, i64)> = Vec::new();
-        let mut put_line = |out: &mut Vec<L>, row: i64, l: &StageLine| {
+        let mut put_line = |out: &mut Vec<L>, row: i64, mut l: StageLine| {
             if row < 0 || row >= h {
                 return;
             }
+            let hit = l.hit.take();
             let (text, left) = place_at(l, col_w);
             out[row as usize] = text;
-            if let Some(hit) = &l.hit {
-                hits.push((hit.clone(), x + left, y + row));
+            if let Some(hit) = hit {
+                hits.push((hit, x + left, y + row));
             }
         };
         match bottom {
@@ -805,7 +808,7 @@ impl Model {
                 } else {
                     ((h - top.len() as i64) / 2).max(0)
                 };
-                for (i, l) in top.iter().enumerate() {
+                for (i, l) in top.into_iter().enumerate() {
                     put_line(&mut out, start + i as i64, l);
                 }
             }
@@ -813,12 +816,8 @@ impl Model {
                 // Playing: title and artist above the cover, progress and
                 // controls below, the group centered so the cover sits in
                 // the middle.
-                let (head, rest) = if bottom.len() > 3 {
-                    (bottom[..3].to_vec(), bottom[3..].to_vec())
-                } else {
-                    (bottom, Vec::new())
-                };
-                let mut group = head;
+                let mut group = bottom;
+                let rest = group.split_off(group.len().min(3));
                 let had_top = !top.is_empty();
                 group.extend(top);
                 if had_top {
@@ -831,7 +830,7 @@ impl Model {
                 group.extend((0..gap).map(|_| StageLine::default()));
                 group.extend(rest);
                 let start = 0;
-                for (i, l) in group.iter().enumerate() {
+                for (i, l) in group.into_iter().enumerate() {
                     put_line(&mut out, start + i as i64, l);
                 }
             }
@@ -1292,24 +1291,25 @@ pub fn marquee(s: &L, wd: usize, t: i64) -> L {
 
 /// A stage line laid out in its column, col_w wide, and where in the
 /// column its text starts.
-pub fn place_at(l: &StageLine, col_w: i64) -> (L, i64) {
+pub fn place_at(l: StageLine, col_w: i64) -> (L, i64) {
     let col_w = col_w.max(0) as usize;
     let (text, wd) = if l.width == 0 || l.width > col_w {
         let t = trunc(&l.text, col_w);
         let wd = w(&t);
         (t, wd)
     } else {
-        (l.text.clone(), l.width)
+        (l.text, l.width)
     };
     let left = if l.center {
         col_w.saturating_sub(wd) / 2
     } else {
         0
     };
-    let mut out = plain(" ".repeat(left));
-    out = cat(out, text);
-    out.spans.push(spaces(col_w.saturating_sub(left + wd)));
-    (out, left as i64)
+    let mut spans = Vec::with_capacity(text.spans.len() + 2);
+    spans.push(spaces(left));
+    spans.extend(text.spans);
+    spans.push(spaces(col_w.saturating_sub(left + wd)));
+    (line(spans), left as i64)
 }
 
 /// A rounded panel of exactly w×h cells: the breadcrumb set into the top
@@ -1331,12 +1331,12 @@ pub fn box_lines(title: &str, crumbed: bool, label: L, lines: Vec<L>, wd: i64, h
     let mut out = vec![cat(top, one(format!("{}╮", "─".repeat(fill)), DIM))];
     let inner = (wd - 3) as usize;
     let side = sp("│", DIM);
-    for i in 0..(h - 2).max(0) as usize {
+    let mut lines = lines.into_iter();
+    for _ in 0..(h - 2).max(0) as usize {
         // Lines come fitted to inner; an empty one is a blank row.
         let l = lines
-            .get(i)
+            .next()
             .filter(|l| w(l) > 0)
-            .cloned()
             .unwrap_or_else(|| plain(" ".repeat(inner)));
         let mut row = L::from(vec![side.clone()]);
         row = cat(row, l);
@@ -1391,7 +1391,41 @@ pub fn put(buf: &mut Buffer, x: i64, y: i64, l: &L) {
     if y < 0 || y >= area.height as i64 || x >= area.width as i64 {
         return;
     }
-    buf.set_line(x as u16, y as u16, l, area.width - x as u16);
+    let (mut x, y) = (x as u16, y as u16);
+    let mut left = area.width - x;
+    // Buffer::set_line, cell for cell. It cuts every span into grapheme
+    // clusters, which cost more than the rest of a frame; a span of
+    // printable ASCII, or of a single glyph one cell wide, has nothing to
+    // cut and is written here directly.
+    for span in &l.spans {
+        if left == 0 {
+            break;
+        }
+        let style = l.style.patch(span.style);
+        let text = span.content.as_ref();
+        let ascii = text.bytes().all(|b| (b' '..=b'~').contains(&b));
+        let mut chars = text.chars();
+        let glyph = matches!((chars.next(), chars.next()), (Some(c), None)
+            if !c.is_control() && text.cell_width() == 1);
+        if !ascii && !glyph {
+            let end = buf.set_stringn(x, y, text, left as usize, style).0;
+            left = left.saturating_sub(end.saturating_sub(x));
+            x = end;
+            continue;
+        }
+        let room = area.right().saturating_sub(x).min(left) as usize;
+        let cells = if glyph {
+            room.min(1)
+        } else {
+            text.len().min(room)
+        };
+        for i in 0..cells {
+            let symbol = if glyph { text } else { &text[i..i + 1] };
+            buf[(x, y)].set_symbol(symbol).set_style(style);
+            x += 1;
+        }
+        left -= cells as u16;
+    }
 }
 
 /// Blanks n cells of row y of buf from x on.
