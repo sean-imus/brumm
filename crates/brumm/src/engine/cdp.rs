@@ -144,11 +144,15 @@ async fn read(mut r: impl AsyncRead + Unpin, waiters: &Waiters) {
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };
+        // What was left over is a message's start without its end: the
+        // search goes on from where it stopped, not from the beginning.
+        let mut from = buf.len();
         buf.extend_from_slice(&chunk[..n]);
         let mut start = 0;
-        while let Some(i) = buf[start..].iter().position(|&b| b == 0) {
-            let msg = &buf[start..start + i];
-            start += i + 1;
+        while let Some(i) = buf[from..].iter().position(|&b| b == 0) {
+            let msg = &buf[start..from + i];
+            start = from + i + 1;
+            from = start;
             let Ok(v) = serde_json::from_slice::<Value>(msg) else {
                 continue;
             };
@@ -232,5 +236,20 @@ mod tests {
             .unwrap();
         assert!(!c.alive());
         assert_eq!(c.call(d, "", "Echo", None).await, Err(CdpError::Closed));
+    }
+
+    /// A reply far longer than one read comes whole, and so do the short
+    /// ones after it.
+    #[tokio::test]
+    async fn long_replies_arrive_in_pieces() {
+        let (c, _chrome) = fake_chrome();
+        let d = Duration::from_secs(5);
+        let long = "x".repeat(300 << 10);
+        let (a, b) = tokio::join!(
+            c.call(d, "", "Echo", Some(json!(long))),
+            c.call(d, "", "Echo", Some(json!("short")))
+        );
+        assert_eq!(a.unwrap(), json!(long));
+        assert_eq!(b.unwrap(), json!("short"));
     }
 }

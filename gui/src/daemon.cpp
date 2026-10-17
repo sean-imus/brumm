@@ -137,12 +137,18 @@ void Daemon::write(QJsonObject req, const QJSValue &done)
 
 void Daemon::readLines()
 {
+    // What was kept holds no newline, so only what came now is searched: a
+    // long reply arriving in many reads is looked through once. Its whole
+    // lines leave the buffer together, before any of them is handled.
+    const qsizetype kept = m_buf.size();
     m_buf += m_sock.readAll();
-    qsizetype nl;
-    while ((nl = m_buf.indexOf('\n')) >= 0) {
-        const QByteArray line = m_buf.left(nl);
-        m_buf.remove(0, nl + 1);
-        const QJsonObject msg = QJsonDocument::fromJson(line).object();
+    const qsizetype last = QByteArrayView(m_buf).sliced(kept).lastIndexOf('\n');
+    if (last < 0)
+        return;
+    const QByteArray lines = m_buf.left(kept + last + 1);
+    m_buf.remove(0, kept + last + 1);
+    for (qsizetype start = 0, nl; (nl = lines.indexOf('\n', start)) >= 0; start = nl + 1) {
+        const QJsonObject msg = QJsonDocument::fromJson(lines.sliced(start, nl - start)).object();
         if (msg.isEmpty())
             continue;
         const auto provider = msg.value("provider").toObject();
