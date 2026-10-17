@@ -8,6 +8,7 @@ mod smooth;
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use image::RgbaImage;
@@ -57,10 +58,22 @@ pub fn cache_path(dir: &Path, url: &str) -> PathBuf {
     )
 }
 
+/// The client covers are downloaded with, made on the first download:
+/// making it reads all of the system's certificates.
+fn client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 /// A cover from the disk cache, downloaded on a miss. Covers never change
 /// at an address; prune bounds the cache by dropping the least recently
 /// used.
-pub async fn cached(client: &reqwest::Client, dir: &Path, url: &str) -> Result<RgbaImage> {
+pub async fn cached(dir: &Path, url: &str) -> Result<RgbaImage> {
     let path = cache_path(dir, url);
     if std::fs::metadata(&path)
         .and_then(|m| m.modified())
@@ -79,7 +92,7 @@ pub async fn cached(client: &reqwest::Client, dir: &Path, url: &str) -> Result<R
         }
         return Ok(img);
     }
-    let b = download(client, url).await?;
+    let b = download(client(), url).await?;
     let img = decode(&b, true)?;
     if std::fs::create_dir_all(dir).is_ok() {
         let tmp = dir.join(format!(".cover-{}", crate::engine::random_hex(6)));

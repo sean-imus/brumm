@@ -363,7 +363,6 @@ pub struct KittyReq {
 
 pub struct Model {
     pub client: Option<Client>,
-    pub http: reqwest::Client,
     /// The channel the loop listens on, for a new connection's events.
     pub tx: Option<std::sync::mpsc::Sender<Msg>>,
     pub cmds: Vec<Cmd>,
@@ -697,10 +696,6 @@ impl Model {
         let has_omarchy = crate::update::has_omarchy();
         let mut m = Model {
             client,
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap_or_default(),
             tx: None,
             cmds: Vec::new(),
             width: 0,
@@ -1172,13 +1167,10 @@ impl Model {
             return;
         }
         self.fetching.insert(url.to_string(), true);
-        let (http, url) = (self.http.clone(), url.to_string());
+        let url = url.to_string();
         self.task(async move {
             let dir = crate::config::cache_dir().join("covers");
-            let img = crate::art::cached(&http, &dir, &url)
-                .await
-                .ok()
-                .map(Arc::new);
+            let img = crate::art::cached(&dir, &url).await.ok().map(Arc::new);
             Some(Msg::Cover { url, img })
         });
     }
