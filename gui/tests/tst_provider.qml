@@ -437,4 +437,30 @@ TestCase {
         fakeDaemon.options = {}
     }
 
+    function test_filterMatchesEveryWordAndFollowsReloads() {
+        store.section = store.secPlaylists
+        const v = store.newView("Playlist", "playlist:filter", {kind:"playlist", id:"filter"})
+        store.stacks[store.section].push(v)
+        store.fill(v, {tracks:[{id:"1",title:"Get Lucky",artist:"Daft Punk",album:"RAM"},
+                               {id:"2",title:"Lucky Star",artist:"Madonna",album:"Madonna"},
+                               {id:"3",title:"Instant Crush",artist:"Daft Punk",album:"RAM"}]})
+        store.startFilter()
+        v.filter = "lucky"
+        store.applyFilter(v)
+        compare(v.rows.map(r => r.track.id).join(","), "1,2")
+        v.filter = "DAFT lucky"
+        store.applyFilter(v)
+        compare(v.rows.map(r => r.track.id).join(","), "1")
+        // The list reloads while filtered: the new rows are what is filtered.
+        store.fill(v, {tracks:[{id:"4",title:"Lucky",artist:"Britney Spears",album:"Oops"},
+                               {id:"5",title:"Daft Lucky",artist:"Nobody",album:"None"}]})
+        compare(v.rows.map(r => r.track.id).join(","), "5")
+        v.filter = ""
+        store.applyFilter(v)
+        compare(v.rows.length, 2)
+        store.clearFilter(v)
+        compare(v.all, null)
+        compare(v.rows.length, 2)
+    }
+
 }

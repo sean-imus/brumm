@@ -519,7 +519,7 @@ Item {
 
     function newView(title, key, item) {
         return { title: title, key: key, item: item || null, rows: [], loaded: false, loading: false,
-                 err: "", sel: 0, qpos: 0, filter: "", all: null, want: "", sortMode: "original", sourceRows: [] }
+                 err: "", sel: 0, qpos: 0, filter: "", all: null, texts: null, textsOf: null, want: "", sortMode: "original", sourceRows: [] }
     }
 
     function stack() { return stacks[section] }
@@ -1207,18 +1207,31 @@ Item {
         rev++
     }
 
+    // Each row's words are lowercased once for the list filtered from
+    // (v.all), not again at every key: a long library filters as fast as
+    // a short one. A plain loop, as closures cost QML's engine more than
+    // the looking does.
     function applyFilter(v) {
         if (v.all === null) return
         const words = v.filter.toLowerCase().split(/\s+/).filter(w => w)
         if (!words.length) v.rows = v.all
-        else v.rows = v.all.filter(r => {
-            let text
-            if (r.track) text = r.track.title + " " + r.track.artist + " " + r.track.album
-            else if (r.item) text = r.item.name + " " + (r.item.artist || "")
-            else return false
-            text = text.toLowerCase()
-            return words.every(w => text.includes(w))
-        })
+        else {
+            if (v.textsOf !== v.all) {
+                v.texts = v.all.map(r => r.track ? (r.track.title + " " + r.track.artist + " " + r.track.album).toLowerCase()
+                                       : r.item ? (r.item.name + " " + (r.item.artist || "")).toLowerCase()
+                                       : null) // headings and notes do not survive a filter
+                v.textsOf = v.all
+            }
+            const rows = []
+            row: for (let i = 0; i < v.all.length; i++) {
+                const text = v.texts[i]
+                if (text === null) continue
+                for (let j = 0; j < words.length; j++)
+                    if (text.indexOf(words[j]) < 0) continue row
+                rows.push(v.all[i])
+            }
+            v.rows = rows
+        }
         v.sel = nearest(v.rows, 0, 1)
     }
 
@@ -1227,6 +1240,7 @@ Item {
         const keep = v.rows[v.sel]
         v.rows = v.all
         v.all = null
+        v.texts = v.textsOf = null
         v.filter = ""
         if (keep) {
             const i = v.rows.indexOf(keep)
